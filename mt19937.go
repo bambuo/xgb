@@ -1,5 +1,7 @@
 package xgb
 
+import "math"
+
 // ── Mersenne Twister (mt19937) PRNG ──────────────────────────
 //
 // 精确复刻 std::mt19937（C++ <random>），这是 GCC/Clang 上
@@ -122,6 +124,123 @@ func mtColSample(numCols int, ratio float64, seed uint32) []int {
 			features = append(features, i)
 		}
 	}
+	return features
+}
+
+// deriveSampleSeed 从主种子派生独立子种子，用于不同迭代和采样操作。
+//
+// 在 XGBoost C++ 中，所有采样操作共享一个全局 mt19937 引擎
+// （common::GlobalRandom()），按顺序推进。这里我们用确定性派生
+// 来模拟独立的随机流，保证不同迭代（iter）和操作类型（kind）
+// 产生可重现的独立随机序列。
+//
+// 参数：
+//   - seed:  主种子（Config.Seed）
+//   - iter:  当前提升轮次
+//   - kind:  操作类型（0=行采样, 1=列采样, 2+=其他）
+//
+// 使用 SplitMix64 风格混合，确保种子空间充分扩散。
+func deriveSampleSeed(seed int64, iter int, kind uint32) uint32 {
+	// SplitMix64 派生：混合种子、迭代和操作类型
+	x := uint64(seed) + uint64(iter)*6364136223846793005 + uint64(kind)*1442695040888963407
+	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
+	x = (x ^ (x >> 27)) * 0x94d049bb133111eb
+	x = x ^ (x >> 31)
+	return uint32(x)
+}
+
+// mtRowSampleGradient 使用基于梯度幅度的采样（gradient_based）。
+// 采样概率与 |grad| 成正比，使高梯度样本有更高的被选中概率。
+func mtRowSampleGradient(numRows int, ratio float64, seed uint32, grads []float64) []int {
+	if ratio >= 1.0 || len(grads) == 0 {
+		return mtRowSample(numRows, ratio, seed)
+	}
+
+	// 计算梯度绝对值作为权重
+	weights := make([]float64, numRows)
+	var totalWeight float64
+	for i := 0; i < numRows && i < len(grads); i++ {
+		w := math.Abs(grads[i])
+		weights[i] = w
+		totalWeight += w
+	}
+	if totalWeight <= 0 {
+		return mtRowSample(numRows, ratio, seed)
+	}
+
+	// 归一化为概率
+	for i := range weights {
+		weights[i] /= totalWeight
+	}
+
+	rng := NewMT19937(seed)
+	indices := make([]int, 0, int(float64(numRows)*ratio))
+	targetCount := int(float64(numRows) * ratio)
+	if targetCount < 1 {
+		targetCount = 1
+	}
+
+	// 加权有放回采样
+	for len(indices) < targetCount {
+		r := rng.Uniform()
+		var cum float64
+		for i, w := range weights {
+			cum += w
+			if r < cum {
+				indices = append(indices, i)
+				break
+			}
+		}
+	}
+
+	return indices
+}
+
+// mtColSampleWeighted 使用特征权重的列采样。
+func mtColSampleWeighted(numCols int, ratio float64, seed uint32, featureWeights []float64) []int {
+	if ratio >= 1.0 {
+		features := make([]int, numCols)
+		for i := range features {
+			features[i] = i
+		}
+		return features
+	}
+
+	if len(featureWeights) < numCols {
+		return mtColSample(numCols, ratio, seed)
+	}
+
+	// 计算总权重
+	var totalWeight float64
+	for i := 0; i < numCols; i++ {
+		if featureWeights[i] > 0 {
+			totalWeight += featureWeights[i]
+		}
+	}
+	if totalWeight <= 0 {
+		return mtColSample(numCols, ratio, seed)
+	}
+
+	rng := NewMT19937(seed)
+	features := make([]int, 0, int(float64(numCols)*ratio))
+
+	for i := 0; i < numCols; i++ {
+		// 每个特征的选中概率 = (ratio * featureWeight / meanWeight) 但有界
+		meanWeight := totalWeight / float64(numCols)
+		p := ratio * (featureWeights[i] / meanWeight)
+		if p > 1.0 {
+			p = 1.0
+		}
+		if rng.Uniform() < p {
+			features = append(features, i)
+		}
+	}
+
+	// 确保至少选中一个特征
+	if len(features) == 0 && numCols > 0 {
+		features = append(features, int(rng.Uniform()*float64(numCols)))
+	}
+
 	return features
 }
 

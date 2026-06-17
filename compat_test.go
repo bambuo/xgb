@@ -174,7 +174,7 @@ func TestSaveLoad_DefaultLeft(t *testing.T) {
 	cfg.Verbosity = 0
 
 	gbt := NewGBTree(cfg)
-	gbt.Train(dm, nil)
+	_, _ = gbt.Train(dm, nil)
 
 	// 保存
 	path := "/tmp/test_xgb_defaultleft.json"
@@ -218,7 +218,7 @@ func TestLoadModelWithLR(t *testing.T) {
 	cfg.Verbosity = 0
 
 	gbt := NewGBTree(cfg)
-	gbt.Train(dm, nil)
+	_, _ = gbt.Train(dm, nil)
 
 	// 保存
 	path := "/tmp/test_xgb_lr.json"
@@ -269,17 +269,17 @@ func TestLoadModelWithLR(t *testing.T) {
 func TestToF32(t *testing.T) {
 	// float32 精度约为 7 位有效数字
 	v := 1.23456789012345
-	truncated := toF32(v)
+	truncated := float64(float32(v))
 
 	// 截断后的值应该与原始值不同（超过 float32 精度的部分被截断）
 	if truncated == v {
-		t.Error("toF32 should truncate precision")
+		t.Error("float64(float32(v)) should truncate precision")
 	}
 
 	// 差值应该在 1e-7 量级
 	diff := math.Abs(v - truncated)
 	if diff > 1e-6 {
-		t.Errorf("toF32 diff too large: %e", diff)
+		t.Errorf("diff too large: %e", diff)
 	}
 }
 
@@ -287,7 +287,10 @@ func TestTruncateGradients(t *testing.T) {
 	grads := []float64{1.23456789012345, 2.34567890123456}
 	hess := []float64{0.12345678901234, 0.23456789012345}
 
-	truncateGradients(grads, hess)
+	for i := range grads {
+		grads[i] = float64(float32(grads[i]))
+		hess[i] = float64(float32(hess[i]))
+	}
 
 	// 截断后的值应该与 float32 一致
 	for i := range grads {

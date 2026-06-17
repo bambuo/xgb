@@ -1,0 +1,9 @@
+{
+  "objective": "binary:logistic",
+  "tree_method": "hist",
+  "max_depth": 4,
+  "eta": 0.3,
+  "lambda": 1.0,
+  "seed": 42,
+  "verbosity": 0
+}

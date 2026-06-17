@@ -31,7 +31,7 @@ func TestGBTree_TrainRegression(t *testing.T) {
 	cfg.Verbosity = 0
 
 	gbt := NewGBTree(cfg)
-	err = gbt.Train(dm, nil)
+	_, err = gbt.Train(dm, nil)
 	if err != nil {
 		t.Fatalf("Train: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestGBTree_TrainBinary(t *testing.T) {
 	cfg.Verbosity = 0
 
 	gbt := NewGBTree(cfg)
-	err = gbt.Train(dm, nil)
+	_, err = gbt.Train(dm, nil)
 	if err != nil {
 		t.Fatalf("Train: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestGBTree_SaveLoad(t *testing.T) {
 	cfg.Verbosity = 0
 
 	gbt := NewGBTree(cfg)
-	gbt.Train(dm, nil)
+	_, _ = gbt.Train(dm, nil)
 
 	// 保存
 	path := "/tmp/test_xgb_model.json"

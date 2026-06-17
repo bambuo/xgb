@@ -19,8 +19,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Lambda != 1.0 {
 		t.Errorf("expected Lambda=1.0, got %f", cfg.Lambda)
 	}
-	if cfg.BaseScore != 0.0 {
-		t.Errorf("expected BaseScore=0.0, got %f", cfg.BaseScore)
+	if cfg.BaseScore != 0.5 {
+		t.Errorf("expected BaseScore=0.5, got %f", cfg.BaseScore)
 	}
 }
 

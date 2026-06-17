@@ -1,10 +1,20 @@
 package xgb
 
+import "math"
+
 // xgb 包的辅助函数。
 
 // min 返回两个整数中的最小值。
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+// max 返回两个整数中的最大值。
+func max(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b
@@ -18,17 +28,35 @@ func absInt(x int) int {
 	return x
 }
 
-// toF32 将 float64 截断为 float32 精度再返回 float64。
-// XGBoost 内部使用 float（32位）存储梯度对（GradientPair），
-// 因此每次梯度计算后需要截断以对齐舍入行为。
-func toF32(v float64) float64 {
-	return float64(float32(v))
+// clamp 将 v 裁剪到 [lo, hi] 范围内。
+func clamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
-// truncateGradients 将梯度/Hessian 数组截断为 float32 精度。
-func truncateGradients(grads, hess []float64) {
-	for i := range grads {
-		grads[i] = toF32(grads[i])
-		hess[i] = toF32(hess[i])
+// log1pSafe 返回 log(1 + x)，对负值进行保护。
+func log1pSafe(x float64) float64 {
+	if x <= -1 {
+		return math.Inf(-1)
 	}
+	return math.Log(1.0 + x)
+}
+
+// nextFloat64 返回有序浮点数集合中的下一个可表示值。
+func nextFloat64(x float64) float64 {
+	if x == 0 {
+		return math.SmallestNonzeroFloat64
+	}
+	bits := math.Float64bits(x)
+	if x > 0 {
+		bits++
+	} else {
+		bits--
+	}
+	return math.Float64frombits(bits)
 }

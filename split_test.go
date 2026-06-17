@@ -35,14 +35,14 @@ func TestCalcGain(t *testing.T) {
 	// GL²/(HL+λ) = 25/11 ≈ 2.2727
 	// GR²/(HR+λ) = 25/11 ≈ 2.2727
 	// (GL+GR)²/(HL+HR+λ) = 100/21 ≈ 4.7619
-	// Gain = 0.5 * (2.2727 + 2.2727 - 4.7619) = 0.5 * (-0.2165) = -0.1083
+	// Gain = 2.2727 + 2.2727 - 4.7619 = -0.2165
 	if math.IsNaN(gain) {
 		t.Error("gain should not be NaN")
 	}
 }
 
 func TestCalcLeafWeight(t *testing.T) {
-	w := calcLeafWeight(-10.0, 20.0, 1.0, 0.0)
+	w := calcLeafWeight(-10.0, 20.0, 1.0, 0.0, 0.0)
 	expected := 10.0 / 21.0
 	if math.Abs(w-expected) > 1e-10 {
 		t.Errorf("expected %f, got %f", expected, w)
@@ -54,14 +54,14 @@ func TestCalcLeafWeight_L1Reg(t *testing.T) {
 	// w = 10/21 ≈ 0.476
 	// alpha/denom = 5/21 ≈ 0.238
 	// w > alpha/denom, so w -= alpha/denom ≈ 0.238
-	w := calcLeafWeight(-10.0, 20.0, 1.0, 5.0)
+	w := calcLeafWeight(-10.0, 20.0, 1.0, 5.0, 0.0)
 	if math.IsNaN(w) {
 		t.Error("L1-regularized leaf weight should not be NaN")
 	}
 }
 
 func TestCalcLeafWeight_ZeroDenom(t *testing.T) {
-	w := calcLeafWeight(5.0, -1.0, 1.0, 0.0)
+	w := calcLeafWeight(5.0, -1.0, 1.0, 0.0, 0.0)
 	if w != 0 {
 		t.Errorf("expected 0 for zero denominator, got %f", w)
 	}

@@ -6,17 +6,79 @@ import "math"
 // 使用完整的 coef 数组（s）追踪 Shapley 权重。
 // 返回切片长度 = nFeatures + 1，最后一个元素是 base value。
 // 预测值 = sum(shap_values)（包含 base）。
+// 学习率（eta）已包含在计算中，SHAP 值直接对应预测值。
 func (gbt *GBTree) SHAP(sample []float64) []float64 {
 	nFeat := len(sample)
 	phi := make([]float64, nFeat+1)
 	phi[nFeat] = gbt.effectiveBaseScore()
+	lr := gbt.Config.LearningRate
 
 	path := make([]shapEntry, 0, 32)
 	s := []float64{1.0} // Shapley 权重数组
 	for _, tree := range gbt.Trees {
-		treeShapRecurse(tree, sample, phi, path, s, 0)
+		treeShapRecurseLR(tree, sample, phi, path, s, 0, lr)
 	}
 	return phi
+}
+
+// treeShapRecurseLR 包含学习率缩放的 TreeSHAP 递归。
+func treeShapRecurseLR(tree *RegTree, sample []float64, phi []float64, path []shapEntry, s []float64, nid int, lr float64) {
+	node := &tree.Nodes[nid]
+	if node.IsLeaf() {
+		leafVal := node.LeafValue * lr // 应用学习率
+		m := len(path)
+		phi[len(phi)-1] += leafVal * s[0]
+		for i := 0; i < m; i++ {
+			phi[path[i].feature] += leafVal * (s[i+1] - s[i])
+		}
+		return
+	}
+
+	fidx := node.FeatureIndex
+	fvalue := sample[fidx]
+	left, right := node.LeftChild, node.RightChild
+
+	leftHess := tree.Nodes[left].SumHess
+	rightHess := tree.Nodes[right].SumHess
+	totalHess := leftHess + rightHess
+	if totalHess <= 0 {
+		leftHess, rightHess = 1, 1
+		totalHess = 2
+	}
+	leftFrac := leftHess / totalHess
+	rightFrac := rightHess / totalHess
+
+	goLeft := false
+	if math.IsNaN(fvalue) {
+		goLeft = node.DefaultLeft
+	} else {
+		goLeft = fvalue <= node.Threshold
+	}
+
+	oldS := make([]float64, len(s))
+	copy(oldS, s)
+
+	extendS := func(zeroFrac, oneFrac float64) ([]float64, []shapEntry) {
+		newS := make([]float64, len(s)+1)
+		for i, v := range s {
+			newS[i] += v * zeroFrac
+			newS[i+1] += v * oneFrac
+		}
+		newPath := append(path, shapEntry{
+			feature:  fidx,
+			zeroFrac: zeroFrac,
+			oneFrac:  oneFrac,
+		})
+		return newS, newPath
+	}
+
+	sL, pathL := extendS(leftFrac, boolToFrac(goLeft))
+	treeShapRecurseLR(tree, sample, phi, pathL, sL, left, lr)
+
+	sR, pathR := extendS(rightFrac, boolToFrac(!goLeft))
+	treeShapRecurseLR(tree, sample, phi, pathR, sR, right, lr)
+
+	_ = oldS
 }
 
 type shapEntry struct {
@@ -226,36 +288,33 @@ func (gbt *GBTree) ApproxSHAP(sample []float64) []float64 {
 	nFeat := len(sample)
 	phi := make([]float64, nFeat+1)
 	phi[nFeat] = gbt.effectiveBaseScore()
+	lr := gbt.Config.LearningRate
 
 	for _, tree := range gbt.Trees {
-		// 路径权重：跟踪每个特征在路径上的 (oneFrac - zeroFrac)
 		pathWeights := make([]float64, nFeat)
-		approxTreeSHAP(tree, sample, phi, pathWeights, 0)
+		approxTreeSHAP(tree, sample, phi, pathWeights, 0, lr)
 	}
 	return phi
 }
 
-// approxTreeSHAP 收集路径权重并分配叶值。
-// 与 C++ 的 ApproxFeatureImportance 算法一致。
-func approxTreeSHAP(tree *RegTree, sample []float64, phi []float64, pathWeights []float64, nid int) {
+func approxTreeSHAP(tree *RegTree, sample []float64, phi []float64, pathWeights []float64, nid int, lr float64) {
 	node := &tree.Nodes[nid]
 	if node.IsLeaf() {
-		// 在叶节点，将叶值按路径权重分配给各特征
 		var totalWeight float64
 		for _, w := range pathWeights {
 			if w != 0 {
 				totalWeight += w
 			}
 		}
+		val := node.LeafValue * lr
 		if totalWeight > 0 {
 			for f, w := range pathWeights {
 				if w != 0 {
-					phi[f] += node.LeafValue * (w / totalWeight)
+					phi[f] += val * (w / totalWeight)
 				}
 			}
 		} else {
-			// 无路径权重（深度为 0 的树）
-			phi[len(phi)-1] += node.LeafValue
+			phi[len(phi)-1] += val
 		}
 		return
 	}
@@ -290,11 +349,10 @@ func approxTreeSHAP(tree *RegTree, sample []float64, phi []float64, pathWeights 
 	pathWeights[fidx] = 1.0 - zeroFrac
 
 	if goLeft {
-		approxTreeSHAP(tree, sample, phi, pathWeights, node.LeftChild)
+		approxTreeSHAP(tree, sample, phi, pathWeights, node.LeftChild, lr)
 	} else {
-		approxTreeSHAP(tree, sample, phi, pathWeights, node.RightChild)
+		approxTreeSHAP(tree, sample, phi, pathWeights, node.RightChild, lr)
 	}
 
-	// 回溯
 	pathWeights[fidx] = oldWeight
 }

@@ -278,6 +278,170 @@ func compareTreeStructure(t *testing.T, dumpPath string, gbt *GBTree) {
 	t.Logf("  trees: %d/%d examined (first 3)", totalNodes, len(pyRoots))
 }
 
+// ── Go Golden Data 回归测试 ──────────────────────────────────
+//
+// 使用 tools/gen_golden_go.go 生成的黄金数据做精确回归验证。
+// 训练和预测用同一套 Go 代码，预测值必须完全一致（diff=0）。
+//
+//go:generate go run tools/gen_golden_go.go
+
+// goGoldenCase 描述一个 Go 黄金数据测试场景。
+type goGoldenCase struct {
+	name         string
+	objective    ObjectiveType
+	numTrees     int
+	maxDepth     int
+	learningRate float64
+	lambda       float64
+	gamma        float64
+	subsample    float64
+	colSample    float64
+	seed         int64
+}
+
+// allGoGoldenCases 返回 tools/gen_golden_go.go 生成的所有测试场景。
+func allGoGoldenCases() []goGoldenCase {
+	return []goGoldenCase{
+		{
+			name: "regression_basic", objective: ObjRegSquareError,
+			numTrees: 10, maxDepth: 4, learningRate: 0.3, lambda: 1.0, seed: 42,
+		},
+		{
+			name: "classification_basic", objective: ObjBinaryLogistic,
+			numTrees: 10, maxDepth: 4, learningRate: 0.3, lambda: 1.0, seed: 42,
+		},
+		{
+			name: "small_regression", objective: ObjRegSquareError,
+			numTrees: 5, maxDepth: 3, learningRate: 0.5, lambda: 1.0, seed: 1,
+		},
+		{
+			name: "classification_missing", objective: ObjBinaryLogistic,
+			numTrees: 10, maxDepth: 4, learningRate: 0.3, lambda: 1.0, seed: 42,
+		},
+		{
+			name: "classification_deep", objective: ObjBinaryLogistic,
+			numTrees: 50, maxDepth: 8, learningRate: 0.1, lambda: 2.0, gamma: 0.1, seed: 42,
+			subsample: 0.8, colSample: 0.8,
+		},
+	}
+}
+
+func TestGoGoldenData_Regression(t *testing.T) {
+	for _, gc := range allGoGoldenCases() {
+		t.Run(gc.name, func(t *testing.T) {
+			runGoGoldenTest(t, gc)
+		})
+	}
+}
+
+func runGoGoldenTest(t *testing.T, gc goGoldenCase) {
+	dir := "testdata"
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Skipf("testdata directory not found, skipping golden test")
+	}
+	prefix := filepath.Join(dir, gc.name+"_golden")
+
+	// 加载黄金数据
+	features := loadCSV(t, prefix+"_features.csv")
+	labels := loadCSV1D(t, prefix+"_labels.csv")
+	goldenPred := loadCSV1D(t, prefix+"_pred.csv")
+
+	if len(features) == 0 || len(labels) == 0 {
+		t.Fatal("empty test data")
+	}
+
+	// 用相同参数重新训练
+	dm, err := NewDMatrix(features, labels)
+	if err != nil {
+		t.Fatalf("DMatrix: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.NumTrees = gc.numTrees
+	cfg.MaxDepth = gc.maxDepth
+	cfg.LearningRate = gc.learningRate
+	cfg.Lambda = gc.lambda
+	cfg.Gamma = gc.gamma
+	cfg.Seed = gc.seed
+	cfg.Objective = gc.objective
+	cfg.Verbosity = 0
+
+	if gc.subsample > 0 {
+		cfg.Subsample = gc.subsample
+	}
+	if gc.colSample > 0 {
+		cfg.ColSampleByTree = gc.colSample
+	}
+
+	gbt := NewGBTree(cfg)
+	if _, err := gbt.Train(dm, nil); err != nil {
+		t.Fatalf("Train: %v", err)
+	}
+
+	// 预测
+	goPred := gbt.PredictBatch(features)
+
+	// 对 logistic 进行变换
+	if gc.objective == ObjBinaryLogistic || gc.objective == ObjRegLogistic {
+		for i := range goPred {
+			goPred[i] = sigmoid(goPred[i])
+		}
+	}
+
+	// 精确对比（回归测试必须完全一致）
+	if len(goPred) != len(goldenPred) {
+		t.Fatalf("prediction length mismatch: got=%d, want=%d", len(goPred), len(goldenPred))
+	}
+
+	var maxDiff float64
+	var diffCount int
+	for i := range goPred {
+		if math.IsNaN(goldenPred[i]) && math.IsNaN(goPred[i]) {
+			continue
+		}
+		diff := math.Abs(goPred[i] - goldenPred[i])
+		diffCount++
+		if diff > maxDiff {
+			maxDiff = diff
+		}
+		if diff > 1e-12 {
+			t.Errorf("  row %d: got=%.18f want=%.18f diff=%.18f", i, goPred[i], goldenPred[i], diff)
+		}
+	}
+
+	t.Logf("  max_diff=%.18f  samples=%d", maxDiff, diffCount)
+
+	if maxDiff > 1e-12 {
+		t.Errorf("regression mismatch: max_diff=%.18f exceeds 1e-12", maxDiff)
+	}
+
+	// 验证模型 JSON 能保存并加载后预测一致
+	modelPath := filepath.Join(t.TempDir(), gc.name+"_model.json")
+	if err := gbt.SaveModel(modelPath); err != nil {
+		t.Fatalf("SaveModel: %v", err)
+	}
+	loaded, err := LoadModel(modelPath)
+	if err != nil {
+		t.Fatalf("LoadModel: %v", err)
+	}
+	loadPred := loaded.PredictBatch(features)
+	if gc.objective == ObjBinaryLogistic || gc.objective == ObjRegLogistic {
+		for i := range loadPred {
+			loadPred[i] = sigmoid(loadPred[i])
+		}
+	}
+	for i := range goPred {
+		if math.IsNaN(goPred[i]) && math.IsNaN(loadPred[i]) {
+			continue
+		}
+		diff := math.Abs(goPred[i] - loadPred[i])
+		if diff > 1e-12 {
+			t.Errorf("save/load mismatch at %d: orig=%.18f loaded=%.18f diff=%.18f",
+				i, goPred[i], loadPred[i], diff)
+		}
+	}
+}
+
 // loadCSV 从 CSV 文件加载二维 float64 矩阵。
 func loadCSV(t *testing.T, path string) [][]float64 {
 	t.Helper()

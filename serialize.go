@@ -335,23 +335,12 @@ func loadNative(lm xgbLearner, learningRate float64) (*GBTree, error) {
 	cfg.NumClass = numClass
 	cfg.LearningRate = learningRate
 
-	if objType, err := ParseObjectiveType(lm.Objective.Name); err == nil {
-		cfg.Objective = objType
-		// 对于二分类/回归 logistic，base_score 是类别比例，而非对数几率。
-		// XGBoost 存储例如 0.356（比例），内部转换为 log(0.356/0.644) = -0.59。
-		// 我们将 BaseScore 设置为原始预测的初始值。
-		if objType == ObjBinaryLogistic || objType == ObjRegLogistic {
-			if baseScore > 0 && baseScore < 1 {
-				cfg.BaseScore = math.Log(baseScore / (1 - baseScore))
-			} else {
-				cfg.BaseScore = 0
-			}
-		} else {
-			cfg.BaseScore = baseScore
+		if objType, err := ParseObjectiveType(lm.Objective.Name); err == nil {
+			cfg.Objective = objType
 		}
-	} else {
+		// BaseScore 存的是概率空间的值（0~1），保持原样。
+		// effectiveBaseScore() 在预测时会自动将概率转换为 log-odds。
 		cfg.BaseScore = baseScore
-	}
 
 	gbt := NewGBTree(cfg)
 
